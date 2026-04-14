@@ -149,6 +149,140 @@ pub async fn vacuum_analyze(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
+/// Look up which of the supplied info hashes are already present in the
+/// `Torrents` table. Used by the bulk-insert path to avoid re-sending
+/// rows that would hit `ON CONFLICT DO NOTHING` anyway, and by the
+/// ingestion pipeline to skip already-known torrents before parsing.
+pub async fn existing_hashes(
+    pool: &PgPool,
+    hashes: &[String],
+) -> anyhow::Result<std::collections::HashSet<String>> {
+    let mut out = std::collections::HashSet::with_capacity(hashes.len());
+    for chunk in hashes.chunks(10_000) {
+        let rows: Vec<(String,)> = sqlx::query_as(
+            r#"SELECT "InfoHash" FROM "Torrents" WHERE "InfoHash" = ANY($1)"#,
+        )
+        .bind(chunk)
+        .fetch_all(pool)
+        .await?;
+        out.extend(rows.into_iter().map(|(h,)| h));
+    }
+    Ok(out)
+}
+
+/// Bulk-insert new torrents. Existing rows (same `InfoHash`) are kept
+/// unchanged thanks to `ON CONFLICT DO NOTHING`.
+///
+/// Phase 3 uses a multi-row `INSERT` wrapped in [`sqlx::QueryBuilder`].
+/// PostgreSQL caps a single prepared statement at 65 535 parameters, so
+/// with 50 columns per row we chunk at 1000 rows per query (50 000 params
+/// per batch, safely under the limit).
+///
+/// This is slower than the .NET `BulkCopyTorrentsAsync` which uses the
+/// Npgsql `COPY ... FROM STDIN (FORMAT BINARY)` path; a later phase can
+/// drop the multi-row INSERT in favour of an sqlx `copy_in_raw` binary
+/// stream once ingestion throughput becomes a bottleneck.
+pub async fn bulk_insert(
+    pool: &PgPool,
+    torrents: &[crate::domain::torrent::TorrentInfo],
+) -> anyhow::Result<usize> {
+    use sqlx::QueryBuilder;
+
+    let total = torrents.len();
+    if total == 0 {
+        return Ok(0);
+    }
+
+    // 50 columns per row, Postgres limit is 65535 params -> up to 1310
+    // rows per statement. 1000 is comfortably under.
+    const BATCH: usize = 1000;
+
+    let mut inserted = 0usize;
+    for chunk in torrents.chunks(BATCH) {
+        let mut qb: QueryBuilder<sqlx::Postgres> = QueryBuilder::new(
+            r#"INSERT INTO "Torrents" (
+                "InfoHash", "RawTitle", "ParsedTitle", "NormalizedTitle", "CleanedParsedTitle",
+                "Trash", "Year", "Resolution", "Seasons", "Episodes", "Complete", "Volumes",
+                "Languages", "Quality", "Hdr", "Codec", "Audio", "Channels", "Dubbed", "Subbed",
+                "Date", "Group", "Edition", "BitDepth", "Bitrate", "Network", "Extended",
+                "Converted", "Hardcoded", "Region", "Ppv", "Is3d", "Site", "Size", "Proper",
+                "Repack", "Retail", "Upscaled", "Remastered", "Unrated", "Documentary",
+                "EpisodeCode", "Country", "Container", "Extension", "Torrent", "Category",
+                "ImdbId", "IsAdult", "IngestedAt"
+            ) "#,
+        );
+
+        qb.push_values(chunk, |mut b, t| {
+            let cleaned = t
+                .cleaned_parsed_title
+                .clone()
+                .or_else(|| {
+                    t.parsed_title
+                        .as_deref()
+                        .map(crate::utils::query::clean_query)
+                })
+                .unwrap_or_default();
+            b.push_bind(&t.info_hash)
+                .push_bind(t.raw_title.clone().unwrap_or_default())
+                .push_bind(t.parsed_title.clone().unwrap_or_default())
+                .push_bind(t.normalized_title.clone().unwrap_or_default())
+                .push_bind(cleaned)
+                .push_bind(t.trash)
+                .push_bind(t.year)
+                .push_bind(t.resolution.clone().unwrap_or_default())
+                .push_bind(&t.seasons)
+                .push_bind(&t.episodes)
+                .push_bind(t.complete)
+                .push_bind(&t.volumes)
+                .push_bind(&t.languages)
+                .push_bind(&t.quality)
+                .push_bind(&t.hdr)
+                .push_bind(&t.codec)
+                .push_bind(&t.audio)
+                .push_bind(&t.channels)
+                .push_bind(t.dubbed)
+                .push_bind(t.subbed)
+                .push_bind(&t.date)
+                .push_bind(&t.group)
+                .push_bind(&t.edition)
+                .push_bind(&t.bit_depth)
+                .push_bind(&t.bitrate)
+                .push_bind(&t.network)
+                .push_bind(t.extended)
+                .push_bind(t.converted)
+                .push_bind(t.hardcoded)
+                .push_bind(&t.region)
+                .push_bind(t.ppv)
+                .push_bind(t.is3d)
+                .push_bind(&t.site)
+                .push_bind(&t.size)
+                .push_bind(t.proper)
+                .push_bind(t.repack)
+                .push_bind(t.retail)
+                .push_bind(t.upscaled)
+                .push_bind(t.remastered)
+                .push_bind(t.unrated)
+                .push_bind(t.documentary)
+                .push_bind(&t.episode_code)
+                .push_bind(&t.country)
+                .push_bind(&t.container)
+                .push_bind(&t.extension)
+                .push_bind(t.torrent)
+                .push_bind(&t.category)
+                .push_bind(&t.imdb_id)
+                .push_bind(t.is_adult)
+                .push_bind(t.ingested_at);
+        });
+
+        qb.push(r#" ON CONFLICT ("InfoHash") DO NOTHING"#);
+
+        let result = qb.build().execute(pool).await?;
+        inserted += result.rows_affected() as usize;
+    }
+
+    Ok(inserted)
+}
+
 /// Prefix a bare IMDb id with `tt` the way `TorrentInfoService.EnsureCorrectFormatImdbId`
 /// does on the .NET side, so `search_torrents_meta` never sees a dangling id.
 fn ensure_imdb_prefix(id: Option<&str>) -> Option<String> {

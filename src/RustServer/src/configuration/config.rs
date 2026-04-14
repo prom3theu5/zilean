@@ -72,6 +72,31 @@ pub(crate) struct AppConfig {
 
     /// Maximum hashes accepted by `GET /torrents/checkcached`. Default 100.
     pub torrents_max_hashes_to_check: usize,
+
+    // --- Phase 3: scheduler + ingestion ----------------------------------
+
+    /// Whether DMM scraping runs on the in-process scheduler when the
+    /// binary is in `serve` mode. Matches `Dmm.EnableScraping`.
+    pub dmm_scraping_enabled: bool,
+
+    /// Cron expression for the DMM sync. Accepts either a five-field or
+    /// six-field string; `scheduler::normalise_cron` prepends the seconds
+    /// column if absent.
+    pub dmm_scrape_schedule: String,
+
+    /// Whether generic ingestion (Zurg / Zilean / Generic endpoints) runs
+    /// on the scheduler. Matches `Ingestion.EnableScraping`.
+    pub ingestion_scraping_enabled: bool,
+
+    /// Cron expression for the generic ingestion.
+    pub ingestion_scrape_schedule: String,
+
+    /// Static endpoints for generic ingestion, represented as a
+    /// JSON-encoded array so the flat config layout can stay env-var-
+    /// friendly. Example:
+    ///   [{"kind":"Zurg","url":"http://zurg:9999"}, ...]
+    #[serde(default)]
+    pub ingestion_endpoints: Option<String>,
 }
 
 pub fn load_config() -> anyhow::Result<AppConfig> {
@@ -94,6 +119,11 @@ pub fn load_config() -> anyhow::Result<AppConfig> {
         .set_default("dmm_max_filtered_results", 200)?
         .set_default("dmm_minimum_score", 0.85)?
         .set_default("torrents_max_hashes_to_check", 100)?
+        // Phase 3 defaults (match .NET EnableScraping / ScrapeSchedule).
+        .set_default("dmm_scraping_enabled", true)?
+        .set_default("dmm_scrape_schedule", "0 * * * *")?
+        .set_default("ingestion_scraping_enabled", false)?
+        .set_default("ingestion_scrape_schedule", "0 * * * *")?
         .add_source(config::Environment::with_prefix("ZILEAN"))
         .build()?;
 
