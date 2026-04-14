@@ -1,5 +1,6 @@
 // src/main.rs
 mod configuration;
+mod db;
 mod dmm;
 mod grpc;
 mod imdb;
