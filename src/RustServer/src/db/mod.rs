@@ -15,5 +15,8 @@
 
 #![allow(dead_code)]
 
+pub mod blacklist;
+pub mod imdb_file;
 pub mod migrate;
 pub mod pool;
+pub mod torrent;
