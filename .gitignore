@@ -23,3 +23,8 @@ src/ParsettOverToRust/target/
 src/RustServer/target/
 
 src/RustServer/descriptor.bin
+
+# Cargo workspace build output (root-level when using workspace).
+/target/
+Cargo.lock.bak
+

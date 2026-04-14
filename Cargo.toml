@@ -1,0 +1,18 @@
+[workspace]
+resolver = "2"
+members = [
+    "src/RustServer",
+    "src/ParsettOverToRust",
+]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/iPromKnight/zilean"
+
+# Profile tuning for release builds.
+# These apply workspace-wide so both crates pick them up.
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
