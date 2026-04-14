@@ -1,15 +1,21 @@
 version: "3"
 
-vars:
-  GO_OUT_DIR: "src/GoPttServer"
-  PYTHON_OUT_DIR: ""
-  HOME_DIR: {sh: "echo $HOME"}
-
-includes:
-  go: .taskfiles/Go/Taskfile.yaml
-  python: .taskfiles/Python/Taskfile.yaml
-
 tasks:
   default:
     silent: true
     cmds: ["task -l"]
+
+  build:
+    desc: "Build the Rust binary in release mode."
+    cmds:
+      - cargo build --release -p zilean_rust
+
+  test:
+    desc: "Run the workspace tests."
+    cmds:
+      - cargo test --workspace
+
+  docker:
+    desc: "Build the container image locally."
+    cmds:
+      - docker build -t zilean:dev -f Dockerfile .

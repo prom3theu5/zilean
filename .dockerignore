@@ -1,104 +1,39 @@
-# Ignore bin and obj directories
-**/bin
-**/obj
-**/out
-**/Debug
-**/Release
-
-# Ignore .NET build artifacts
-*.dll
-*.exe
-*.pdb
-*.nuget
-*.nupkg
-*.snupkg
-*.log
-*.user
-*.csproj.user
-*.suo
-
 # Ignore OS-specific files
 .DS_Store
 Thumbs.db
-
-# Ignore build output
-**/build
-**/app
-*.publish
-
-# Ignore configuration files that shouldn't be copied
-*.config
-*.settings
-*.sln.cache
-
-# Ignore sensitive files
-**/secrets.json
-**/*.key
-**/*.cer
-**/*.pfx
-**/*.pem
 
 # Ignore IDE-specific files
 **/.vscode
 **/.idea
 **/.qodo
-*.sln.ide
 
-# Ignore other common unnecessary files
+# Ignore misc junk
 *.tmp
 *.temp
 *.bak
 *.old
-
-# Ignore Python cache files (if any Python scripts are used)
-**/__pycache__
-**/*.py[cod]
-**/python
-
-# Ignore any generated files
-*.generated.*
-*.g.*
-
-# Ignore test results
-TestResults/
-*.trx
-*.coverage
-
-# Ignore node_modules if using any Node.js scripts
-node_modules/
-
-# Ignore logs
 logs/
 
-# Ignore git root
+# Git metadata — must not be in the image
 **/.git
 
-# Ignore Docker files
+# Dockerfiles themselves
 .dockerignore
 Dockerfile
 
-# Ignore Local Rust Assets
-src/ParsettOverToRust/target/**
-src/RustServer/target/**
+# Rust build artefacts (source tree is COPYed fresh into the builder stage).
+target/
+**/target/
 src/RustServer/data/**
 
-# Ignore Python and Go
-src/PythonPttServer/**
-src/GoPttServer/**
-
-# Ignore github, k6 and scripts
+# CI / dev helpers that don't belong in the build context.
 **/.github
 **/k6
 **/scripts
-**/.run
 **/eng
-
-# Ignore repo files
-**/Taskfile.yml
+CHANGELOG.md
+README.md
+Taskfile.yaml
 release-please-config.json
 renovate.json
-README.md
 .release-please-manifest.json
-.github
-CHANGELOG.md
-Zilean.sln.DotSettings.user

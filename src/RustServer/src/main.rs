@@ -1,10 +1,10 @@
-// src/main.rs
+// src/main.rs — Phase 4: gRPC server removed; HTTP is the only server.
 mod cli;
 mod configuration;
 mod db;
 mod dmm;
 mod domain;
-mod grpc;
+mod grpc; // retained: holds the parsett ↔ proto mapping used by dmm::page_parser
 mod http;
 mod imdb;
 mod ingestion;
@@ -22,12 +22,11 @@ use tracing_subscriber::EnvFilter;
 
 use crate::cli::{Cli, Command};
 use crate::configuration::config::{AppConfig, load_config};
-use crate::grpc::server::start_server as start_grpc_server;
 use crate::imdb::ImdbSearcher;
 use crate::ingestion::generic::{Endpoint, EndpointKind};
 
 pub mod proto {
-    tonic::include_proto!("zilean_rust");
+    include!(concat!(env!("OUT_DIR"), "/zilean_rust.rs"));
 }
 
 #[global_allocator]
@@ -68,97 +67,100 @@ async fn main() -> anyhow::Result<()> {
     }
 }
 
-/// Full server: HTTP (if opted in) + gRPC + scheduler.
+/// HTTP server + scheduler. Phase 4 removed the gRPC listener, so the
+/// binary now runs the HTTP listener unconditionally when invoked via
+/// `serve`. `ZILEAN_HTTP_PORT` defaults to 8181 (the port the .NET
+/// ApiService previously used) and can be overridden.
 async fn serve(app_config: AppConfig) -> anyhow::Result<()> {
-    let http_port = app_config.http_port;
+    let port = app_config.http_port.unwrap_or(8181);
     let http_bind = app_config.http_bind.clone();
 
-    if let Some(port) = http_port {
-        // Phase 2: migrations + HTTP. Phase 3: + scheduler + startup run.
-        let db = db::pool::connect(&app_config.database_url).await?;
-        db::migrate::run(&db).await?;
+    let db = db::pool::connect(&app_config.database_url).await?;
+    db::migrate::run(&db).await?;
 
-        let config = Arc::new(app_config);
-        let searcher = build_searcher(config.imdb_minimum_score)?;
+    let config = Arc::new(app_config);
+    let searcher = build_searcher(config.imdb_minimum_score)?;
 
-        let sched = scheduler::Scheduler::new().await?;
-        if config.dmm_scraping_enabled {
-            let cfg = Arc::clone(&config);
-            let pool = db.clone();
-            let s = Arc::clone(&searcher);
-            sched
-                .schedule("DmmSync", &config.dmm_scrape_schedule, move || {
+    let sched = scheduler::Scheduler::new().await?;
+    let sync_mutex = sched.sync_mutex();
+
+    if config.dmm_scraping_enabled {
+        let cfg = Arc::clone(&config);
+        let pool = db.clone();
+        let s = Arc::clone(&searcher);
+        sched
+            .schedule("DmmSync", &config.dmm_scrape_schedule, move || {
+                let cfg = Arc::clone(&cfg);
+                let pool = pool.clone();
+                let s = Arc::clone(&s);
+                let fut: Pin<
+                    Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>,
+                > = Box::pin(async move {
+                    ingestion::dmm::run(cfg, pool, s).await?;
+                    Ok(())
+                });
+                fut
+            })
+            .await?;
+    }
+    if config.ingestion_scraping_enabled {
+        let cfg = Arc::clone(&config);
+        let pool = db.clone();
+        let s = Arc::clone(&searcher);
+        sched
+            .schedule(
+                "GenericSync",
+                &config.ingestion_scrape_schedule,
+                move || {
                     let cfg = Arc::clone(&cfg);
                     let pool = pool.clone();
                     let s = Arc::clone(&s);
-                    let fut: Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> =
-                        Box::pin(async move {
-                            ingestion::dmm::run(cfg, pool, s).await?;
-                            Ok(())
-                        });
+                    let fut: Pin<
+                        Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>,
+                    > = Box::pin(async move {
+                        run_generic_all(cfg, pool, s).await?;
+                        Ok(())
+                    });
                     fut
-                })
-                .await?;
-        }
-        if config.ingestion_scraping_enabled {
-            let cfg = Arc::clone(&config);
-            let pool = db.clone();
-            let s = Arc::clone(&searcher);
-            sched
-                .schedule(
-                    "GenericSync",
-                    &config.ingestion_scrape_schedule,
-                    move || {
-                        let cfg = Arc::clone(&cfg);
-                        let pool = pool.clone();
-                        let s = Arc::clone(&s);
-                        let fut: Pin<Box<dyn std::future::Future<Output = anyhow::Result<()>> + Send>> =
-                            Box::pin(async move {
-                                run_generic_all(cfg, pool, s).await?;
-                                Ok(())
-                            });
-                        fut
-                    },
-                )
-                .await?;
-        }
-        sched.start().await?;
+                },
+            )
+            .await?;
+    }
+    sched.start().await?;
 
-        // Startup-run-if-empty: matches .NET StartupService.StartedAsync.
-        if config.dmm_scraping_enabled {
-            let cfg = Arc::clone(&config);
-            let pool = db.clone();
-            let s = Arc::clone(&searcher);
-            tokio::spawn(async move {
-                if let Ok(count) = sqlx::query_scalar::<_, i64>(
-                    r#"SELECT COUNT(1) FROM "ParsedPages""#,
-                )
-                .fetch_one(&pool)
-                .await
-                {
-                    if count == 0 {
-                        tracing::info!("ParsedPages empty; running DMM sync on startup");
-                        if let Err(err) = ingestion::dmm::run(cfg, pool, s).await {
-                            tracing::error!(?err, "startup DMM sync failed");
-                        }
+    // Startup-run-if-empty: matches .NET StartupService.StartedAsync.
+    if config.dmm_scraping_enabled {
+        let cfg = Arc::clone(&config);
+        let pool = db.clone();
+        let s = Arc::clone(&searcher);
+        let m = Arc::clone(&sync_mutex);
+        tokio::spawn(async move {
+            if let Ok(count) =
+                sqlx::query_scalar::<_, i64>(r#"SELECT COUNT(1) FROM "ParsedPages""#)
+                    .fetch_one(&pool)
+                    .await
+            {
+                if count == 0 {
+                    tracing::info!("ParsedPages empty; running DMM sync on startup");
+                    let _guard = m.lock().await;
+                    if let Err(err) = ingestion::dmm::run(cfg, pool, s).await {
+                        tracing::error!(?err, "startup DMM sync failed");
                     }
                 }
-            });
-        }
-
-        let http_task =
-            tokio::spawn(http::serve(port, http_bind, config.clone(), db.clone()));
-        let grpc_task = tokio::spawn(start_grpc_server((*config).clone()));
-
-        tokio::select! {
-            r = http_task => r??,
-            r = grpc_task => r??,
-        }
-        Ok(())
-    } else {
-        // HTTP disabled — preserve pre-Phase-2 gRPC-only behaviour.
-        start_grpc_server(app_config).await
+            }
+        });
     }
+
+    // HTTP handlers need the searcher + mutex to wire /dmm/on-demand-scrape.
+    http::serve(
+        port,
+        http_bind,
+        config,
+        db,
+        searcher,
+        sync_mutex,
+    )
+    .await
 }
 
 async fn one_shot_dmm(app_config: AppConfig) -> anyhow::Result<()> {
@@ -193,9 +195,6 @@ fn build_searcher(min_score: f32) -> anyhow::Result<Arc<ArcSwap<ImdbSearcher>>> 
     Ok(Arc::new(ArcSwap::new(Arc::new(s))))
 }
 
-/// Fan out to every configured Zurg/Zilean/Generic endpoint. Logs per-
-/// endpoint summaries and continues past failures so one unreachable
-/// host doesn't poison the whole run.
 async fn run_generic_all(
     config: Arc<AppConfig>,
     db: PgPool,
@@ -221,9 +220,6 @@ async fn run_generic_all(
     Ok(())
 }
 
-/// Parse the JSON array in `ZILEAN_INGESTION_ENDPOINTS` into typed
-/// endpoints. A missing or malformed value results in an empty list; the
-/// caller logs and moves on.
 fn parse_endpoints(raw: Option<&str>) -> Vec<Endpoint> {
     #[derive(serde::Deserialize)]
     struct Raw {

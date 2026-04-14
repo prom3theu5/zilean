@@ -50,7 +50,7 @@ impl DmmFileEntryProcessor {
 
     pub fn stream_parsed_pages(
         self: Arc<Self>,
-    ) -> impl Stream<Item = Result<ParsedDmmPageEntry, tonic::Status>> + Send + 'static {
+    ) -> impl Stream<Item = Result<ParsedDmmPageEntry, anyhow::Error>> + Send + 'static {
         try_stream! {
             let filenames = match self.get_pages_from_repo_root().await {
                 Ok(f) => f,
@@ -60,7 +60,7 @@ impl DmmFileEntryProcessor {
                 }
             };
 
-            self.load_parsed_pages().await.map_err(Self::internal_error)?;
+            self.load_parsed_pages().await?;
 
             for file in &filenames {
                 let filename = Path::new(file)
@@ -92,7 +92,7 @@ impl DmmFileEntryProcessor {
                     }
                 }
 
-                self.add_parsed_page(&filename, count).await.map_err(Self::internal_error)?;
+                self.add_parsed_page(&filename, count).await?;
             }
         }
     }
@@ -236,7 +236,4 @@ impl DmmFileEntryProcessor {
         Ok(pages)
     }
 
-    fn internal_error(err: anyhow::Error) -> tonic::Status {
-        tonic::Status::internal(err.to_string())
-    }
 }

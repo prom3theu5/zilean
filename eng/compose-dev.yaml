@@ -1,6 +1,6 @@
-### Docker Compose file for development environment only, do not use in production without changing postgres username, password
-### and updating in the connection string!
-### Also - do not expose your ports in production on the postgres container.
+### Docker Compose file for development. Do not use in production without
+### changing the Postgres credentials and updating the connection string,
+### and do not expose the Postgres port publicly.
 
 services:
   postgres:
@@ -29,11 +29,17 @@ services:
     container_name: zilean
     tty: true
     environment:
-      Zilean__Database__ConnectionString: "Host=postgres;Database=zilean;Username=postgres;Password=postgres;Include Error Detail=true;Timeout=30;CommandTimeout=3600;"
-      Zilean__Parsing__ParsingThreads: 6
+      # Flat env vars consumed by the Rust binary. See
+      # src/RustServer/src/configuration/config.rs for the full list.
+      ZILEAN_DATABASE_URL: "postgres://postgres:postgres@postgres:5432/zilean"
+      ZILEAN_PARSING_THREADS: 6
+      ZILEAN_HTTP_PORT: 8181
+      ZILEAN_HTTP_BIND: "0.0.0.0"
+      # Generate one with `openssl rand -hex 32` for non-dev deployments.
+      ZILEAN_API_KEY: "dev-api-key-change-me"
     restart: no
     volumes:
-      - zilen_data:/app/data
+      - zilean_data:/app/data
     depends_on:
       postgres:
         condition: service_healthy
@@ -42,5 +48,5 @@ services:
       - 8181:8181
 
 volumes:
-  zilen_data:
+  zilean_data:
   postgres_data:

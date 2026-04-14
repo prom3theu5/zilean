@@ -1,64 +1,10 @@
-use crate::proto::{TorrentInfo, TorrentTitleResponse};
+//! Mapping from `parsett_rust::ParsedTitle` to the internal `proto::TorrentInfo`
+//! still used by the DMM page parser. Phase 4 removed the gRPC streaming
+//! helpers that used to live here; only the torrent-info mapper remains.
+
+use crate::proto::TorrentInfo;
 use crate::{proto, utils};
 use parsett_rust::ParsedTitle;
-
-pub fn map_parsed_title(
-    info_hash: &str,
-    original_title: &str,
-    parsed: ParsedTitle,
-) -> TorrentTitleResponse {
-    TorrentTitleResponse {
-        info_hash: info_hash.into(),
-        original_title: original_title.into(),
-        title: parsed.title,
-        resolution: parsed.resolution,
-        date: parsed.date,
-        year: parsed.year,
-        ppv: parsed.ppv,
-        trash: parsed.trash,
-        adult: parsed.adult,
-        edition: parsed.edition,
-        extended: parsed.extended,
-        convert: parsed.convert,
-        hardcoded: parsed.hardcoded,
-        proper: parsed.proper,
-        repack: parsed.repack,
-        retail: parsed.retail,
-        remastered: parsed.remastered,
-        unrated: parsed.unrated,
-        region: parsed.region,
-        quality: parsed.quality.map(|q| proto::Quality::from(q) as i32),
-        bitrate: parsed.bitrate,
-        bit_depth: parsed.bit_depth,
-        hdr: parsed.hdr,
-        codec: parsed.codec.map(|c| proto::Codec::from(c) as i32),
-        audio: parsed.audio,
-        channels: parsed.channels,
-        group: parsed.group,
-        container: parsed.container,
-        volumes: parsed.volumes,
-        seasons: parsed.seasons,
-        episodes: parsed.episodes,
-        episode_code: parsed.episode_code,
-        complete: parsed.complete,
-        languages: parsed
-            .languages
-            .into_iter()
-            .map(|l| proto::Language::from(l) as i32)
-            .collect(),
-        dubbed: parsed.dubbed,
-        site: parsed.site,
-        extension: parsed.extension,
-        subbed: parsed.subbed,
-        documentary: parsed.documentary,
-        upscaled: parsed.upscaled,
-        is_3d: parsed.is_3d,
-        extras: parsed.extras,
-        size: parsed.size,
-        network: parsed.network.map(|n| proto::Network::from(n) as i32),
-        scene: parsed.scene,
-    }
-}
 
 pub fn map_torrent_info(
     info_hash: &str,
@@ -182,14 +128,6 @@ fn assign_category(adult: bool, seasons: &[i32], episodes: &[i32]) -> String {
         "movie".to_string()
     } else {
         "tvSeries".to_string()
-    }
-}
-
-pub fn map_to_empty_on_error(info_hash: &str, original_title: &str) -> TorrentTitleResponse {
-    TorrentTitleResponse {
-        info_hash: info_hash.into(),
-        original_title: original_title.into(),
-        ..Default::default()
     }
 }
 

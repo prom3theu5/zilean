@@ -80,13 +80,49 @@ async fn dmm_filtered(
     }
 }
 
-async fn on_demand_scrape() -> impl IntoResponse {
-    // Phase 3 replaces this with a proper dispatch into the in-process
-    // scheduler + DMM scraper. Until then, return a conservative 503 so
-    // callers don't mistake the endpoint for working silently.
-    (
-        StatusCode::SERVICE_UNAVAILABLE,
-        "on-demand scrape is not yet served by the Rust HTTP surface; \
-         use the .NET endpoint or wait for Phase 3",
+async fn on_demand_scrape(State(state): State<AppState>) -> axum::response::Response {
+    // Acquire the shared "SyncJobs" mutex so we don't overlap a scheduled
+    // tick. `try_lock` returns immediately; if the mutex is held we reply
+    // 409 Conflict, matching the .NET `SyncOnDemandState.IsRunning` guard
+    // which returned early when another scrape was already in flight.
+    let guard = match state.sync_mutex.try_lock() {
+        Ok(g) => g,
+        Err(_) => {
+            return (
+                StatusCode::CONFLICT,
+                "on-demand scrape already running",
+            )
+                .into_response();
+        }
+    };
+
+    // The endpoint returns once the sync completes, mirroring the .NET
+    // handler. For long-running scrapes callers should use the regular
+    // scheduled cadence.
+    let result = crate::ingestion::dmm::run(
+        state.config.clone(),
+        state.db.clone(),
+        state.searcher.clone(),
     )
+    .await;
+    drop(guard);
+
+    match result {
+        Ok(report) => (
+            StatusCode::NO_CONTENT,
+            format!(
+                "DMM sync completed: parsed {}, inserted {}",
+                report.parsed, report.inserted
+            ),
+        )
+            .into_response(),
+        Err(err) => {
+            tracing::error!(?err, "on-demand DMM sync failed");
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("DMM sync failed: {err}"),
+            )
+                .into_response()
+        }
+    }
 }
