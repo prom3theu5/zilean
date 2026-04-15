@@ -10,14 +10,15 @@ FROM --platform=$BUILDPLATFORM rust:1.87-slim AS builder
 ARG TARGETOS
 ARG TARGETARCH
 
+# libssl and pkg-config are needed by the reqwest/sqlx rustls builds;
+# git2, cmake, and make are needed by the git2 crate that drives the
+# DMM repo sync. protobuf-compiler and the prost/tonic toolchain are
+# gone now that there's no .proto file in the tree.
 RUN apt-get update && apt-get install -y \
-    perl \
-    make \
     cmake \
     pkg-config \
     curl \
     build-essential \
-    protobuf-compiler \
     libssl-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -26,11 +27,8 @@ ENV OPENSSL_NO_VENDOR=0
 
 WORKDIR /build
 
-# Copy the workspace root plus every member crate. The workspace manifest
-# lists src/RustServer and src/ParsettOverToRust as members; the Protos
-# directory is referenced from build.rs via a relative path.
+# Copy the workspace root and every member crate.
 COPY Cargo.toml ./Cargo.toml
-COPY src/Protos ./src/Protos
 COPY src/ParsettOverToRust ./src/ParsettOverToRust
 COPY src/RustServer ./src/RustServer
 

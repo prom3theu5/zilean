@@ -1,10 +1,10 @@
-// src/main.rs — Phase 4: gRPC server removed; HTTP is the only server.
+// src/main.rs — single-binary Zilean. HTTP + scheduler + in-process
+// ingestion; no gRPC, no proto, no subprocess.
 mod cli;
 mod configuration;
 mod db;
 mod dmm;
 mod domain;
-mod grpc; // retained: holds the parsett ↔ proto mapping used by dmm::page_parser
 mod http;
 mod imdb;
 mod ingestion;
@@ -24,10 +24,6 @@ use crate::cli::{Cli, Command};
 use crate::configuration::config::{AppConfig, load_config};
 use crate::imdb::ImdbSearcher;
 use crate::ingestion::generic::{Endpoint, EndpointKind};
-
-pub mod proto {
-    include!(concat!(env!("OUT_DIR"), "/zilean_rust.rs"));
-}
 
 #[global_allocator]
 static GLOBAL: jemallocator::Jemalloc = jemallocator::Jemalloc;

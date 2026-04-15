@@ -2,6 +2,7 @@
 //! plus the filter shapes consumed by the handlers.
 
 use chrono::{DateTime, Utc};
+use parsett_rust::ParsedTitle;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use sqlx::postgres::PgRow;
@@ -130,6 +131,92 @@ pub struct TorrentInfo {
 }
 
 impl TorrentInfo {
+    /// Build a [`TorrentInfo`] from a [`parsett_rust::ParsedTitle`] plus the
+    /// outer context the parser doesn't know (the info hash, the
+    /// pre-parse raw title, and the advertised byte size of the torrent).
+    ///
+    /// This is the single conversion that used to live in two places —
+    /// `grpc::mapping::map_torrent_info` (proto path, feeding the DMM
+    /// page parser) and the inline struct build in `ingestion::generic`.
+    /// Both now call through here, so:
+    ///
+    /// * there is no proto-hop between parsing and the HTTP/JSON layer,
+    /// * every ingestion path shares identical field normalisation, and
+    /// * the `category`, `normalized_title`, and `cleaned_parsed_title`
+    ///   values are computed exactly once.
+    pub fn from_parsed_title(
+        info_hash: String,
+        raw_title: String,
+        bytes: i64,
+        parsed: ParsedTitle,
+    ) -> Self {
+        let normalized = crate::utils::strings::normalize_title(&parsed.title);
+        let cleaned = crate::utils::query::clean_query(&parsed.title);
+        let category = assign_category(parsed.adult, &parsed.seasons, &parsed.episodes);
+
+        Self {
+            info_hash,
+            raw_title: Some(raw_title),
+            parsed_title: Some(parsed.title),
+            normalized_title: Some(normalized),
+            cleaned_parsed_title: Some(cleaned),
+            trash: parsed.trash,
+            year: parsed.year,
+            resolution: parsed.resolution,
+            seasons: parsed.seasons,
+            episodes: parsed.episodes,
+            complete: parsed.complete,
+            volumes: parsed.volumes,
+            // Debug-format the parsett enum variants to the PascalCase
+            // strings the `.NET` side used to store (e.g. "English",
+            // "BluRay"). This matches the JSON contract consumers are
+            // already indexed against.
+            languages: parsed
+                .languages
+                .into_iter()
+                .map(|l| format!("{l:?}"))
+                .collect(),
+            quality: parsed.quality.map(|q| format!("{q:?}")),
+            hdr: parsed.hdr,
+            codec: parsed.codec.map(|c| format!("{c:?}")),
+            audio: parsed.audio,
+            channels: parsed.channels,
+            dubbed: parsed.dubbed,
+            subbed: parsed.subbed,
+            date: parsed.date,
+            group: parsed.group,
+            edition: parsed.edition,
+            bit_depth: parsed.bit_depth,
+            bitrate: parsed.bitrate,
+            network: parsed.network.map(|n| format!("{n:?}")),
+            extended: parsed.extended,
+            converted: parsed.convert,
+            hardcoded: parsed.hardcoded,
+            region: parsed.region,
+            ppv: parsed.ppv,
+            is3d: parsed.is_3d,
+            site: parsed.site,
+            size: Some(bytes.to_string()),
+            proper: parsed.proper,
+            repack: parsed.repack,
+            retail: parsed.retail,
+            upscaled: parsed.upscaled,
+            remastered: parsed.remastered,
+            unrated: parsed.unrated,
+            documentary: parsed.documentary,
+            episode_code: parsed.episode_code,
+            country: None,
+            container: parsed.container,
+            extension: parsed.extension,
+            torrent: false,
+            category,
+            imdb_id: None,
+            imdb: None,
+            is_adult: parsed.adult,
+            ingested_at: Utc::now(),
+        }
+    }
+
     /// Build a [`TorrentInfo`] from a Postgres row.
     ///
     /// Two call sites feed this function, with slightly different column
@@ -248,6 +335,18 @@ fn get_vec_i32(row: &PgRow, col: &str) -> Vec<i32> {
 
 fn get_vec_str(row: &PgRow, col: &str) -> Vec<String> {
     row.try_get::<Vec<String>, _>(col).unwrap_or_default()
+}
+
+/// Classify a torrent as `movie` / `tvSeries` / `xxx` from parser output.
+/// Matches the `assign_category` helper `grpc::mapping` used to hold.
+fn assign_category(adult: bool, seasons: &[i32], episodes: &[i32]) -> String {
+    if adult {
+        "xxx".to_string()
+    } else if seasons.is_empty() && episodes.is_empty() {
+        "movie".to_string()
+    } else {
+        "tvSeries".to_string()
+    }
 }
 
 // -- request / filter types ------------------------------------------------

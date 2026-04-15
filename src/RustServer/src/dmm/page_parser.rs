@@ -1,8 +1,15 @@
+//! DMM page parser.
+//!
+//! Walks the cloned DMM hash repository, decompresses the LZ-string JSON
+//! embedded in each HTML page, and yields one [`TorrentInfo`] per torrent
+//! found. Phase 5 deleted the proto hop that used to sit between the
+//! parser and the JSON response layer; this module now produces the
+//! canonical `domain::TorrentInfo` directly.
+
 use crate::dmm::db_service::DmmDbService;
 use crate::dmm::types::parsed_pages::ParsedPages;
-use crate::grpc::mapping::map_torrent_info;
+use crate::domain::torrent::TorrentInfo;
 use crate::imdb::searcher::ImdbSearcher;
-use crate::proto::{ParsedDmmPageEntry, TorrentInfo};
 use arc_swap::ArcSwap;
 use async_stream::try_stream;
 use dashmap::DashMap;
@@ -48,9 +55,17 @@ impl DmmFileEntryProcessor {
         }
     }
 
+    /// Produce a [`Stream`] of fully populated [`TorrentInfo`] rows, ready
+    /// to be bulk-inserted into the `Torrents` table.
+    ///
+    /// The stream walks every `.html` file in the DMM repo (excluding
+    /// `index.html`), skipping any file already recorded in
+    /// `ParsedPages`. Pages that yielded at least one torrent are recorded
+    /// atomically via [`Self::add_parsed_page`] so a subsequent run picks
+    /// up where the previous one left off.
     pub fn stream_parsed_pages(
         self: Arc<Self>,
-    ) -> impl Stream<Item = Result<ParsedDmmPageEntry, anyhow::Error>> + Send + 'static {
+    ) -> impl Stream<Item = Result<TorrentInfo, anyhow::Error>> + Send + 'static {
         try_stream! {
             let filenames = match self.get_pages_from_repo_root().await {
                 Ok(f) => f,
@@ -80,10 +95,7 @@ impl DmmFileEntryProcessor {
                 while let Some(result) = stream.next().await {
                     match result {
                         Ok(torrent) => {
-                            yield ParsedDmmPageEntry {
-                                filename: filename.clone(),
-                                torrent_info: torrent.into(),
-                            };
+                            yield torrent;
                             count += 1;
                         }
                         Err(err) => {
@@ -97,7 +109,7 @@ impl DmmFileEntryProcessor {
         }
     }
 
-    pub fn process_page_stream(
+    fn process_page_stream(
         self: Arc<Self>,
         file: String,
         filename_only: String,
@@ -132,14 +144,17 @@ impl DmmFileEntryProcessor {
                 _ => return,
             };
 
+            // Parallel parsing is where this pipeline spends the vast
+            // majority of its CPU. `parsett_rust` is CPU-bound and lock-
+            // free, so Rayon scales close to linearly with `parsing_threads`.
             let results: Vec<TorrentInfo> = torrents
-            .into_par_iter()
-            .filter_map(|item| this.process_torrent_item(item)) // filter out None
-            .collect();
+                .into_par_iter()
+                .filter_map(|item| this.process_torrent_item(item))
+                .collect();
 
-        for torrent_info in results {
-            yield torrent_info;
-        }
+            for torrent_info in results {
+                yield torrent_info;
+            }
         }
     }
 
@@ -168,7 +183,7 @@ impl DmmFileEntryProcessor {
             }
         };
 
-        let parsed_entry = match parse_title(title) {
+        let parsed = match parse_title(title) {
             Ok(p) => p,
             Err(e) => {
                 warn!("Skipping item '{}': failed to parse title: {:?}", title, e);
@@ -176,20 +191,27 @@ impl DmmFileEntryProcessor {
             }
         };
 
-        let mut torrent_info = map_torrent_info(info_hash, title, bytes, parsed_entry);
+        let mut torrent_info = TorrentInfo::from_parsed_title(
+            info_hash.to_owned(),
+            title.to_owned(),
+            bytes,
+            parsed,
+        );
 
-        if let Some(best) = self
-            .imdb_searcher
-            .load()
-            .search(
-                &torrent_info.normalized_title,
-                &torrent_info.category,
-                torrent_info.year.unwrap_or_default(),
-            )
-            .into_iter()
-            .next()
-        {
-            torrent_info.imdb_id = Some(best.imdb_id);
+        // Best-effort IMDb enrichment. `search` needs the normalised
+        // title + category + year, all of which `from_parsed_title`
+        // already populated.
+        if let Some(normalized) = torrent_info.normalized_title.as_deref() {
+            let year = torrent_info.year.unwrap_or_default();
+            if let Some(best) = self
+                .imdb_searcher
+                .load()
+                .search(normalized, &torrent_info.category, year)
+                .into_iter()
+                .next()
+            {
+                torrent_info.imdb_id = Some(best.imdb_id);
+            }
         }
 
         Some(torrent_info)
@@ -235,5 +257,4 @@ impl DmmFileEntryProcessor {
 
         Ok(pages)
     }
-
 }

@@ -1,4 +1,3 @@
-use crate::proto::*;
 use std::collections::HashSet;
 use std::fs;
 use std::ops::Bound;
@@ -10,6 +9,16 @@ use tantivy::{Index, IndexReader, ReloadPolicy, TantivyDocument, Term};
 use tracing::{debug, info};
 
 pub const INDEX_PATH: &str = "./data/tantivy_index";
+
+/// A single IMDb-index hit. Previously came from the proto module; now a
+/// plain domain struct the searcher owns.
+#[derive(Clone, Debug)]
+pub struct Match {
+    pub imdb_id: String,
+    pub title: String,
+    pub year: i32,
+    pub score: f32,
+}
 
 #[derive(Clone)]
 pub struct ImdbSearcher {

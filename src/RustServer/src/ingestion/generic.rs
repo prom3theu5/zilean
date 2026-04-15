@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use arc_swap::ArcSwap;
-use chrono::Utc;
 use reqwest::header;
 use serde::Deserialize;
 use sqlx::PgPool;
@@ -24,8 +23,6 @@ use crate::configuration::config::AppConfig;
 use crate::db::torrent as torrent_repo;
 use crate::domain::torrent::TorrentInfo;
 use crate::imdb::ImdbSearcher;
-use crate::utils::query::clean_query;
-use crate::utils::strings::normalize_title;
 use parsett_rust::parse_batch;
 
 /// Endpoint the ingestion should pull from.
@@ -124,6 +121,10 @@ pub async fn run(
     let parsed = parse_batch(titles);
 
     // Build the TorrentInfo rows in lockstep with the parsed results.
+    // The heavy-lifting (enum-to-string coercion, category assignment,
+    // cleaned/normalised title computation) lives in
+    // `TorrentInfo::from_parsed_title` so the DMM page parser and this
+    // endpoint agree on every derived field.
     let mut rows: Vec<TorrentInfo> = Vec::with_capacity(novel.len());
     for (entry, parse_result) in novel.into_iter().zip(parsed) {
         let parsed = match parse_result {
@@ -134,85 +135,35 @@ pub async fn run(
             }
         };
 
-        let normalized = normalize_title(&parsed.title);
-        let category = assign_category(parsed.adult, &parsed.seasons, &parsed.episodes);
-        let cleaned = clean_query(&parsed.title);
+        let mut torrent_info = TorrentInfo::from_parsed_title(
+            entry.hash,
+            entry.name,
+            entry.size,
+            parsed,
+        );
 
-        // Best-effort IMDb enrichment.
-        let imdb_id = searcher
-            .load()
-            .search(&normalized, &category, parsed.year.unwrap_or(0))
-            .into_iter()
-            .next()
-            .map(|m| m.imdb_id);
+        // Best-effort IMDb enrichment. `from_parsed_title` already
+        // populated `normalized_title`, `category`, and `year`.
+        if let Some(normalized) = torrent_info.normalized_title.as_deref() {
+            if let Some(best) = searcher
+                .load()
+                .search(
+                    normalized,
+                    &torrent_info.category,
+                    torrent_info.year.unwrap_or(0),
+                )
+                .into_iter()
+                .next()
+            {
+                torrent_info.imdb_id = Some(best.imdb_id);
+            }
+        }
 
-        rows.push(TorrentInfo {
-            info_hash: entry.hash,
-            raw_title: Some(entry.name),
-            parsed_title: Some(parsed.title.clone()),
-            normalized_title: Some(normalized),
-            cleaned_parsed_title: Some(cleaned),
-            trash: parsed.trash,
-            year: parsed.year,
-            resolution: parsed.resolution,
-            seasons: parsed.seasons,
-            episodes: parsed.episodes,
-            complete: parsed.complete,
-            volumes: parsed.volumes,
-            languages: parsed.languages.into_iter().map(|l| format!("{l:?}")).collect(),
-            quality: parsed.quality.map(|q| format!("{q:?}")),
-            hdr: parsed.hdr,
-            codec: parsed.codec.map(|c| format!("{c:?}")),
-            audio: parsed.audio,
-            channels: parsed.channels,
-            dubbed: parsed.dubbed,
-            subbed: parsed.subbed,
-            date: parsed.date,
-            group: parsed.group,
-            edition: parsed.edition,
-            bit_depth: parsed.bit_depth,
-            bitrate: parsed.bitrate,
-            network: parsed.network.map(|n| format!("{n:?}")),
-            extended: parsed.extended,
-            converted: parsed.convert,
-            hardcoded: parsed.hardcoded,
-            region: parsed.region,
-            ppv: parsed.ppv,
-            is3d: parsed.is_3d,
-            site: parsed.site,
-            size: Some(entry.size.to_string()),
-            proper: parsed.proper,
-            repack: parsed.repack,
-            retail: parsed.retail,
-            upscaled: parsed.upscaled,
-            remastered: parsed.remastered,
-            unrated: parsed.unrated,
-            documentary: parsed.documentary,
-            episode_code: parsed.episode_code,
-            country: None,
-            container: parsed.container,
-            extension: parsed.extension,
-            torrent: false,
-            category,
-            imdb_id,
-            imdb: None,
-            is_adult: parsed.adult,
-            ingested_at: Utc::now(),
-        });
+        rows.push(torrent_info);
     }
 
     let inserted = torrent_repo::bulk_insert(&db, &rows).await?;
     tracing::info!(%url, inserted, "generic ingestion finished");
 
     Ok(inserted)
-}
-
-fn assign_category(adult: bool, seasons: &[i32], episodes: &[i32]) -> String {
-    if adult {
-        "xxx".into()
-    } else if seasons.is_empty() && episodes.is_empty() {
-        "movie".into()
-    } else {
-        "tvSeries".into()
-    }
 }

@@ -12,7 +12,6 @@ use arc_swap::ArcSwap;
 
 use crate::configuration::config::AppConfig;
 use crate::imdb::{ImdbIngestor, ImdbSearcher};
-use crate::proto::IngestImdbRequest;
 
 pub struct ResyncOptions {
     pub force_download: bool,
@@ -29,10 +28,7 @@ pub async fn run(
 ) -> anyhow::Result<()> {
     let ingestor = ImdbIngestor::new(searcher.clone());
     let indexed = ingestor
-        .ingest_imdb_data(&IngestImdbRequest {
-            force_download: opts.force_download,
-            force_index: opts.force_create_index,
-        })
+        .ingest_imdb_data(opts.force_download, opts.force_create_index)
         .await?;
     tracing::info!(indexed, "IMDb re-index complete");
 

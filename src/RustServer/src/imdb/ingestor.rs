@@ -1,5 +1,4 @@
 use crate::imdb::ImdbSearcher;
-use crate::proto::IngestImdbRequest;
 use crate::utils;
 use arc_swap::ArcSwap;
 use flate2::read::GzDecoder;
@@ -55,7 +54,11 @@ impl ImdbIngestor {
         Self { searcher }
     }
 
-    pub async fn ingest_imdb_data(&self, request: &IngestImdbRequest) -> anyhow::Result<usize> {
+    pub async fn ingest_imdb_data(
+        &self,
+        force_download: bool,
+        force_index: bool,
+    ) -> anyhow::Result<usize> {
         let db_url = std::env::var("ZILEAN_DATABASE_URL").expect("ZILEAN_DATABASE_URL must be set");
         let file_name = "title.basics.tsv";
         let base_url = "https://datasets.imdbws.com/";
@@ -67,7 +70,7 @@ impl ImdbIngestor {
 
         let mut valid_cached_file = false;
 
-        if !request.force_download && data_file.exists() {
+        if !force_download && data_file.exists() {
             let metadata = fs::metadata(&data_file).await?;
             if let Ok(modified) = metadata.modified() {
                 if modified.elapsed().unwrap_or(Duration::MAX) < Duration::from_secs(30 * 86400) {
@@ -103,7 +106,7 @@ impl ImdbIngestor {
             fs::remove_file(&temp_gz_path).await.ok();
         }
 
-        self.load_and_index(&data_file, &db_url, request, &valid_cached_file)
+        self.load_and_index(&data_file, &db_url, force_index, valid_cached_file)
             .await
             .map_err(anyhow::Error::from)
     }
@@ -112,15 +115,15 @@ impl ImdbIngestor {
         &self,
         tsv_path: &Path,
         db_url: &String,
-        request: &IngestImdbRequest,
-        valid_cached_file: &bool,
+        force_index: bool,
+        valid_cached_file: bool,
     ) -> anyhow::Result<usize> {
         let current = self.searcher.load();
         let mut new_searcher = (*current).clone();
         Arc::make_mut(&mut new_searcher).drop_and_initialise_index()?;
         tracing::info!("Re-initialised Tantivy index");
 
-        if *valid_cached_file && !request.force_index {
+        if valid_cached_file && !force_index {
             tracing::info!("Valid cached file, and force indexing is false, using existing index.");
             return Ok(0);
         }
