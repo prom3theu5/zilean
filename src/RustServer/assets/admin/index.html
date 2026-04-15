@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="color-scheme" content="dark light" />
+  <meta name="description" content="Zilean admin portal" />
+  <link rel="manifest" href="manifest.webmanifest" />
+  <link rel="icon" href="icon.svg" type="image/svg+xml" />
+  <link rel="stylesheet" href="app.css" />
+  <title>Zilean Admin</title>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icon.svg" alt="" width="28" height="28" />
+      <h1>Zilean</h1>
+      <span class="sub">admin</span>
+    </div>
+    <div class="status" id="status" aria-live="polite"></div>
+    <button type="button" class="ghost" id="logout-btn" hidden>Sign out</button>
+  </header>
+
+  <!-- Login panel: shown when no API key is stored. -->
+  <main id="login-view" class="panel center" hidden>
+    <form id="login-form">
+      <h2>Sign in</h2>
+      <p class="muted">Paste the API key from <code>ZILEAN_API_KEY</code>. It's saved in this browser's local storage only.</p>
+      <label for="apikey">API key</label>
+      <input id="apikey" type="password" autocomplete="off" spellcheck="false" required />
+      <button type="submit" class="primary">Unlock</button>
+      <p id="login-error" class="error" role="alert" hidden></p>
+    </form>
+  </main>
+
+  <!-- Main app: tabs + content panels. -->
+  <div id="app-view" hidden>
+    <nav class="tabs" role="tablist">
+      <button type="button" role="tab" data-tab="stats" class="tab active">Stats</button>
+      <button type="button" role="tab" data-tab="torrents" class="tab">Torrents</button>
+      <button type="button" role="tab" data-tab="blacklist" class="tab">Blacklist</button>
+      <button type="button" role="tab" data-tab="sync" class="tab">Sync</button>
+    </nav>
+
+    <!-- Stats -->
+    <section class="panel" data-panel="stats">
+      <div class="cards" id="stats-cards">
+        <!-- populated by JS -->
+      </div>
+    </section>
+
+    <!-- Torrents -->
+    <section class="panel" data-panel="torrents" hidden>
+      <div class="toolbar">
+        <input id="torrents-search" type="search" placeholder="Search by parsed title…" autocomplete="off" />
+        <label>Per page
+          <select id="torrents-per-page">
+            <option value="25">25</option>
+            <option value="50" selected>50</option>
+            <option value="100">100</option>
+            <option value="200">200</option>
+          </select>
+        </label>
+        <span class="spacer"></span>
+        <span id="torrents-count" class="muted"></span>
+      </div>
+
+      <div class="grid-wrap">
+        <table class="grid">
+          <thead>
+            <tr>
+              <th>InfoHash</th><th>Category</th><th>Raw Title</th><th>Parsed Title</th>
+              <th>IMDb</th><th>Year</th><th>Size</th><th>Adult</th><th>Trash</th>
+              <th class="actions">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="torrents-body"></tbody>
+        </table>
+      </div>
+
+      <div class="pager">
+        <button type="button" id="torrents-prev">← Prev</button>
+        <span id="torrents-page" class="muted">Page 1</span>
+        <button type="button" id="torrents-next">Next →</button>
+      </div>
+    </section>
+
+    <!-- Blacklist -->
+    <section class="panel" data-panel="blacklist" hidden>
+      <div class="toolbar">
+        <span class="spacer"></span>
+        <span id="blacklist-count" class="muted"></span>
+      </div>
+      <div class="grid-wrap">
+        <table class="grid">
+          <thead>
+            <tr><th>InfoHash</th><th>Reason</th><th>Blacklisted</th><th class="actions">Actions</th></tr>
+          </thead>
+          <tbody id="blacklist-body"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Sync -->
+    <section class="panel" data-panel="sync" hidden>
+      <div class="cards">
+        <article class="card">
+          <h3>DMM sync</h3>
+          <p class="muted">Pull the DMM hash-list repo and ingest any new pages.</p>
+          <button type="button" class="primary" data-sync="dmm">Run DMM sync</button>
+        </article>
+        <article class="card">
+          <h3>Generic sync</h3>
+          <p class="muted">Pull every configured Zurg / Zilean / Generic endpoint.</p>
+          <button type="button" class="primary" data-sync="generic">Run generic sync</button>
+        </article>
+        <article class="card">
+          <h3>IMDb re-index</h3>
+          <p class="muted">Re-download IMDb basics and rebuild the Tantivy index.</p>
+          <label><input type="checkbox" id="imdb-force-download" /> Force download</label>
+          <button type="button" class="primary" data-sync="imdb">Run IMDb re-index</button>
+        </article>
+      </div>
+      <pre id="sync-log" class="log" aria-live="polite"></pre>
+    </section>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

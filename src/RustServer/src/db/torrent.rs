@@ -137,6 +137,73 @@ pub async fn delete_by_hash(pool: &PgPool, info_hash: &str) -> anyhow::Result<bo
     Ok(result.rows_affected() > 0)
 }
 
+/// Paginated admin listing. Orders newest-first on `IngestedAt`. Accepts
+/// an optional `ILIKE` search term against `ParsedTitle`. Unlike the
+/// public search, this is a deterministic, operator-facing query — it
+/// does not involve pg_trgm similarity scoring.
+pub async fn admin_list(
+    pool: &PgPool,
+    search: Option<&str>,
+    per_page: i64,
+    offset: i64,
+) -> anyhow::Result<(Vec<TorrentInfo>, i64)> {
+    let like = search
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|s| format!("%{s}%"));
+
+    let total: i64 = match like.as_deref() {
+        Some(pat) => sqlx::query_scalar(
+            r#"SELECT COUNT(*) FROM "Torrents" WHERE "ParsedTitle" ILIKE $1"#,
+        )
+        .bind(pat)
+        .fetch_one(pool)
+        .await?,
+        None => sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Torrents""#)
+            .fetch_one(pool)
+            .await?,
+    };
+
+    let rows = match like.as_deref() {
+        Some(pat) => sqlx::query(
+            r#"
+            SELECT *
+            FROM "Torrents"
+            WHERE "ParsedTitle" ILIKE $1
+            ORDER BY "IngestedAt" DESC
+            LIMIT $2 OFFSET $3
+            "#,
+        )
+        .bind(pat)
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?,
+        None => sqlx::query(
+            r#"
+            SELECT *
+            FROM "Torrents"
+            ORDER BY "IngestedAt" DESC
+            LIMIT $1 OFFSET $2
+            "#,
+        )
+        .bind(per_page)
+        .bind(offset)
+        .fetch_all(pool)
+        .await?,
+    };
+
+    Ok((rows.iter().map(TorrentInfo::from_pg_row).collect(), total))
+}
+
+/// Return a single torrent count, used by the admin stats card.
+pub async fn count(pool: &PgPool) -> anyhow::Result<i64> {
+    let n: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Torrents""#)
+        .fetch_one(pool)
+        .await?;
+    Ok(n)
+}
+
 /// VACUUM (VERBOSE, ANALYZE) "Torrents". Ingestion code calls this after
 /// a bulk COPY to reclaim space and update planner statistics.
 pub async fn vacuum_analyze(pool: &PgPool) -> anyhow::Result<()> {

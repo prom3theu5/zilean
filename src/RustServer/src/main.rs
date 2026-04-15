@@ -191,7 +191,9 @@ fn build_searcher(min_score: f32) -> anyhow::Result<Arc<ArcSwap<ImdbSearcher>>> 
     Ok(Arc::new(ArcSwap::new(Arc::new(s))))
 }
 
-async fn run_generic_all(
+/// Fan out to every configured Zurg/Zilean/Generic endpoint. `pub(crate)`
+/// so the admin portal and the scheduler can both call through it.
+pub(crate) async fn run_generic_all(
     config: Arc<AppConfig>,
     db: PgPool,
     searcher: Arc<ArcSwap<ImdbSearcher>>,

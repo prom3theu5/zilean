@@ -36,6 +36,10 @@ pub fn build_router(state: AppState) -> Router {
     }
     app = app.merge(routes::blacklist::router(state.clone()));
 
+    if state.config.dashboard_enabled {
+        app = app.merge(routes::admin::router(state.clone()));
+    }
+
     app.with_state(state)
         .layer(TimeoutLayer::new(Duration::from_secs(300)))
         .layer(TraceLayer::new_for_http())

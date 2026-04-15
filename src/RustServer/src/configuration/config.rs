@@ -73,6 +73,11 @@ pub(crate) struct AppConfig {
     /// Maximum hashes accepted by `GET /torrents/checkcached`. Default 100.
     pub torrents_max_hashes_to_check: usize,
 
+    /// Whether the admin PWA is served at `/admin`. When disabled the
+    /// static assets and JSON API are both unmounted and return 404.
+    /// Matches the .NET `EnableDashboard` flag.
+    pub dashboard_enabled: bool,
+
     // --- Phase 3: scheduler + ingestion ----------------------------------
 
     /// Whether DMM scraping runs on the in-process scheduler when the
@@ -119,6 +124,7 @@ pub fn load_config() -> anyhow::Result<AppConfig> {
         .set_default("dmm_max_filtered_results", 200)?
         .set_default("dmm_minimum_score", 0.85)?
         .set_default("torrents_max_hashes_to_check", 100)?
+        .set_default("dashboard_enabled", true)?
         // Phase 3 defaults (match .NET EnableScraping / ScrapeSchedule).
         .set_default("dmm_scraping_enabled", true)?
         .set_default("dmm_scrape_schedule", "0 * * * *")?

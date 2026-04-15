@@ -45,3 +45,19 @@ pub async fn remove(pool: &PgPool, info_hash: &str) -> anyhow::Result<bool> {
         .await?;
     Ok(result.rows_affected() > 0)
 }
+
+/// Return every row in the blacklist, newest first. Used by the admin
+/// portal's blacklist tab. Paginated calls are not needed because the
+/// blacklist is operator-maintained and small in practice.
+pub async fn list(pool: &PgPool) -> anyhow::Result<Vec<crate::domain::blacklist::BlacklistedItem>> {
+    let rows = sqlx::query_as::<_, crate::domain::blacklist::BlacklistedItem>(
+        r#"
+        SELECT "InfoHash", "Reason", "BlacklistedAt"
+        FROM "BlacklistedItems"
+        ORDER BY "BlacklistedAt" DESC
+        "#,
+    )
+    .fetch_all(pool)
+    .await?;
+    Ok(rows)
+}
