@@ -63,6 +63,7 @@
           </select>
         </label>
         <span class="spacer"></span>
+        <button type="button" class="primary" id="torrents-add-btn">+ Add torrent</button>
         <span id="torrents-count" class="muted"></span>
       </div>
 
@@ -85,6 +86,87 @@
         <button type="button" id="torrents-next">Next →</button>
       </div>
     </section>
+
+    <!-- Torrent edit dialog — reused for Add and Edit. -->
+    <dialog id="torrent-dialog" aria-labelledby="dialog-title">
+      <form id="torrent-form" method="dialog">
+        <h2 id="dialog-title">Edit torrent</h2>
+
+        <label for="dlg-info-hash">Info hash
+          <input id="dlg-info-hash" name="info_hash" type="text" minlength="40" maxlength="40" pattern="[0-9a-fA-F]{40}" spellcheck="false" autocomplete="off" required />
+          <span class="hint">40-character SHA-1 hex. Not editable when editing an existing torrent.</span>
+        </label>
+
+        <label for="dlg-raw-title">Raw title
+          <input id="dlg-raw-title" name="raw_title" type="text" required />
+          <span class="hint">The title is re-parsed on save. Checked overrides below take precedence over the parser output.</span>
+        </label>
+
+        <label for="dlg-size">Size (bytes)
+          <input id="dlg-size" name="size" type="number" min="0" step="1" required />
+        </label>
+
+        <fieldset class="overrides">
+          <legend>Overrides</legend>
+
+          <div class="override">
+            <label class="row">
+              <input type="checkbox" data-override-toggle="category" />
+              <span>Override category</span>
+            </label>
+            <select data-override-value="category" disabled>
+              <option value="movie">movie</option>
+              <option value="tvSeries">tvSeries</option>
+              <option value="xxx">xxx</option>
+            </select>
+          </div>
+
+          <div class="override">
+            <label class="row">
+              <input type="checkbox" data-override-toggle="year" />
+              <span>Override year</span>
+            </label>
+            <input type="number" min="0" max="9999" data-override-value="year" disabled />
+          </div>
+
+          <div class="override">
+            <label class="row">
+              <input type="checkbox" data-override-toggle="imdb_id" />
+              <span>Override IMDb id</span>
+            </label>
+            <input type="text" placeholder="tt1234567" data-override-value="imdb_id" disabled />
+          </div>
+
+          <div class="override">
+            <label class="row">
+              <input type="checkbox" data-override-toggle="adult" />
+              <span>Override adult flag</span>
+            </label>
+            <label class="row">
+              <input type="checkbox" data-override-value="adult" disabled />
+              <span class="muted">Mark as adult</span>
+            </label>
+          </div>
+
+          <div class="override">
+            <label class="row">
+              <input type="checkbox" data-override-toggle="trash" />
+              <span>Override trash flag</span>
+            </label>
+            <label class="row">
+              <input type="checkbox" data-override-value="trash" disabled />
+              <span class="muted">Mark as trash</span>
+            </label>
+          </div>
+        </fieldset>
+
+        <p id="dlg-error" class="error" role="alert" hidden></p>
+        <div class="dialog-actions">
+          <button type="button" id="dlg-cancel">Cancel</button>
+          <button type="submit" class="primary" id="dlg-save">Save</button>
+        </div>
+      </form>
+    </dialog>
 
     <!-- Blacklist -->
     <section class="panel" data-panel="blacklist" hidden>

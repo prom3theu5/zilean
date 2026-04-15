@@ -163,6 +163,7 @@ async function loadTorrents() {
       <td>${pill("adult", t.adult)}</td>
       <td>${pill("trash", t.trash)}</td>
       <td class="actions">
+        <button type="button" data-action="edit">Edit</button>
         <button type="button" data-action="blacklist">Blacklist</button>
         <button type="button" class="danger" data-action="delete">Delete</button>
       </td>
@@ -200,6 +201,115 @@ async function onTorrentAction(event) {
       });
       await loadTorrents();
     } catch (err) { setStatus(err.message, "error"); }
+  } else if (btn.dataset.action === "edit") {
+    try {
+      // Fetch the full row so the dialog sees every field — the table
+      // only renders a display-sized subset.
+      const data = await fetchJson(`${API}/torrents/${hash}`);
+      openTorrentDialog("edit", data);
+    } catch (err) { setStatus(err.message, "error"); }
+  }
+}
+
+// --- torrent edit / create dialog ---------------------------------
+
+const dialog = () => $("#torrent-dialog");
+let dialogMode = "create";
+
+function openTorrentDialog(mode, row) {
+  dialogMode = mode;
+  $("#dialog-title").textContent = mode === "create" ? "Add torrent" : "Edit torrent";
+
+  const hashField = $("#dlg-info-hash");
+  hashField.disabled = mode === "edit";
+  hashField.value = mode === "edit" ? ((row && row.info_hash) || "") : "";
+  $("#dlg-raw-title").value = mode === "edit" ? ((row && row.raw_title) || "") : "";
+
+  // Size is stored as text in the DB; coerce to a number for the form.
+  const rawSize = row && row.size ? Number.parseInt(row.size, 10) : NaN;
+  $("#dlg-size").value = Number.isFinite(rawSize) ? rawSize : "";
+
+  // Reset every override toggle to unchecked; seed the value inputs with
+  // the row's current values so operators can tick a box without having
+  // to re-type what's already there.
+  $$('[data-override-toggle]').forEach((cb) => {
+    cb.checked = false;
+    const key = cb.dataset.overrideToggle;
+    const input = $(`[data-override-value="${key}"]`);
+    if (input) input.disabled = true;
+  });
+
+  $('[data-override-value="category"]').value = (row && row.category) || "movie";
+  $('[data-override-value="year"]').value = (row && row.year) || "";
+  $('[data-override-value="imdb_id"]').value = (row && row.imdb_id) || "";
+  $('[data-override-value="adult"]').checked = !!(row && row.adult);
+  $('[data-override-value="trash"]').checked = !!(row && row.trash);
+
+  $("#dlg-error").hidden = true;
+  dialog().showModal();
+}
+
+function closeTorrentDialog() {
+  dialog().close();
+}
+
+async function onDialogSubmit(event) {
+  event.preventDefault();
+  const err = $("#dlg-error");
+  err.hidden = true;
+
+  const payload = {
+    info_hash: $("#dlg-info-hash").value.trim().toLowerCase(),
+    raw_title: $("#dlg-raw-title").value.trim(),
+    size: String(Number.parseInt($("#dlg-size").value || "0", 10)),
+  };
+
+  // Client-side validation — server validates too.
+  if (!/^[0-9a-f]{40}$/.test(payload.info_hash)) {
+    err.textContent = "Info hash must be 40 hex characters.";
+    err.hidden = false;
+    return;
+  }
+  if (!payload.raw_title) {
+    err.textContent = "Raw title is required.";
+    err.hidden = false;
+    return;
+  }
+
+  // Layer each ticked override on top. Unticked overrides are omitted so
+  // the server keeps whatever parsett derives from the raw title.
+  $$('[data-override-toggle]').forEach((cb) => {
+    if (!cb.checked) return;
+    const key = cb.dataset.overrideToggle;
+    const el = $(`[data-override-value="${key}"]`);
+    let value;
+    if (el.type === "checkbox") value = !!el.checked;
+    else if (el.type === "number") value = Number.parseInt(el.value || "0", 10);
+    else value = el.value;
+    payload[`${key}_override`] = value;
+  });
+
+  try {
+    if (dialogMode === "create") {
+      await fetchJson(`${API}/torrents`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+    } else {
+      const hash = payload.info_hash;
+      const body = { ...payload };
+      delete body.info_hash;
+      await fetchJson(`${API}/torrents/${hash}`, {
+        method: "PATCH",
+        body: JSON.stringify(body),
+      });
+    }
+    closeTorrentDialog();
+    await loadTorrents();
+    setStatus("Saved", "ok");
+  } catch (e) {
+    err.textContent = e.message;
+    err.hidden = false;
   }
 }
 
@@ -316,6 +426,23 @@ function wireUp() {
     loadTorrents().catch(err => setStatus(err.message, "error"));
   });
   $("#torrents-body").addEventListener("click", onTorrentAction);
+
+  // Add-torrent dialog: toolbar button, cancel, submit, and the per-
+  // override toggles that enable/disable their value inputs.
+  $("#torrents-add-btn").addEventListener("click", () => openTorrentDialog("create"));
+  $("#dlg-cancel").addEventListener("click", closeTorrentDialog);
+  $("#torrent-form").addEventListener("submit", onDialogSubmit);
+  $$('[data-override-toggle]').forEach((cb) => {
+    cb.addEventListener("change", () => {
+      const key = cb.dataset.overrideToggle;
+      const valueEl = $(`[data-override-value="${key}"]`);
+      if (valueEl) valueEl.disabled = !cb.checked;
+    });
+  });
+  // Native <dialog> closes on backdrop click if we wire it up explicitly.
+  $("#torrent-dialog").addEventListener("click", (e) => {
+    if (e.target === e.currentTarget) closeTorrentDialog();
+  });
 
   // Blacklist.
   $("#blacklist-body").addEventListener("click", onBlacklistAction);

@@ -75,8 +75,16 @@ pub fn router(state: AppState) -> Router<AppState> {
     // Authenticated JSON API.
     let api: Router<AppState> = Router::new()
         .route("/admin/api/stats", get(api_stats))
-        .route("/admin/api/torrents", get(api_list_torrents))
-        .route("/admin/api/torrents/{hash}", delete(api_delete_torrent))
+        .route(
+            "/admin/api/torrents",
+            get(api_list_torrents).post(api_create_torrent),
+        )
+        .route(
+            "/admin/api/torrents/{hash}",
+            get(api_get_torrent)
+                .patch(api_update_torrent)
+                .delete(api_delete_torrent),
+        )
         .route("/admin/api/torrents/{hash}/blacklist", post(api_blacklist_torrent))
         .route("/admin/api/blacklist", get(api_list_blacklist))
         .route("/admin/api/blacklist/{hash}", delete(api_unblacklist))
@@ -212,6 +220,192 @@ async fn api_delete_torrent(
         Ok(false) => Err((StatusCode::NOT_FOUND, "not found".into())),
         Err(err) => Err((StatusCode::INTERNAL_SERVER_ERROR, err.to_string())),
     }
+}
+
+// --- torrent create / edit -------------------------------------------------
+
+/// Payload for `POST /admin/api/torrents` and `PATCH .../{hash}`.
+///
+/// Mirrors the fields the .NET dashboard's edit dialog exposed. Each
+/// `*_override` is `None` to fall back to whatever `parsett_rust` derives
+/// from `raw_title`, or `Some(v)` to force that specific value. For
+/// example, `year_override: Some(1999)` pins the year regardless of
+/// what the parser finds in the title.
+#[derive(Deserialize)]
+struct AdminTorrentEdit {
+    /// Required on POST. Ignored on PATCH (the path param wins).
+    #[serde(default)]
+    info_hash: Option<String>,
+    raw_title: String,
+    /// Stored in `"Size"` verbatim. The .NET column was text even though
+    /// the value is conceptually a byte count.
+    size: String,
+    #[serde(default)]
+    category_override: Option<String>,
+    #[serde(default)]
+    year_override: Option<i32>,
+    #[serde(default)]
+    imdb_id_override: Option<String>,
+    #[serde(default)]
+    adult_override: Option<bool>,
+    #[serde(default)]
+    trash_override: Option<bool>,
+}
+
+fn is_hex40(s: &str) -> bool {
+    s.len() == 40 && s.chars().all(|c| c.is_ascii_hexdigit())
+}
+
+/// Apply the operator's overrides on top of a freshly-parsed
+/// `TorrentInfo`. Centralised here so create + update share the exact
+/// same layering logic.
+fn apply_overrides(t: &mut TorrentInfo, edit: &AdminTorrentEdit) {
+    if let Some(cat) = edit.category_override.as_deref() {
+        if !cat.is_empty() {
+            t.category = cat.to_string();
+        }
+    }
+    if let Some(year) = edit.year_override {
+        t.year = Some(year);
+    }
+    if let Some(imdb) = edit.imdb_id_override.as_deref() {
+        t.imdb_id = if imdb.is_empty() { None } else { Some(imdb.to_string()) };
+    }
+    if let Some(adult) = edit.adult_override {
+        t.is_adult = adult;
+        if adult {
+            // Staying consistent with parsett: an adult=true torrent's
+            // category is "xxx" unless the operator has also overridden
+            // the category (which we've already applied above).
+            if edit.category_override.is_none() {
+                t.category = "xxx".to_string();
+            }
+        }
+    }
+    if let Some(trash) = edit.trash_override {
+        t.trash = trash;
+    }
+    t.size = Some(edit.size.clone());
+}
+
+/// Shared body validator.
+fn validate_edit(edit: &AdminTorrentEdit) -> Result<(), (StatusCode, String)> {
+    if edit.raw_title.trim().is_empty() {
+        return Err((StatusCode::BAD_REQUEST, "raw_title is required".into()));
+    }
+    if edit.size.trim().is_empty() || edit.size.parse::<i64>().is_err() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "size must be a positive integer byte count".into(),
+        ));
+    }
+    Ok(())
+}
+
+/// Build a fresh `TorrentInfo` from the operator's raw title + size, then
+/// overlay any overrides. Returns `None` if `parsett_rust` couldn't parse
+/// the title (which shouldn't normally happen because `parsett_rust`
+/// itself catches panics, but we handle the error anyway).
+fn build_from_edit(
+    info_hash: String,
+    edit: &AdminTorrentEdit,
+) -> Result<TorrentInfo, (StatusCode, String)> {
+    let size_bytes = edit.size.parse::<i64>().unwrap_or(0);
+    let parsed = parsett_rust::parse_title(&edit.raw_title)
+        .map_err(|err| (StatusCode::BAD_REQUEST, format!("parse failed: {err:?}")))?;
+    let mut info =
+        TorrentInfo::from_parsed_title(info_hash, edit.raw_title.clone(), size_bytes, parsed);
+    apply_overrides(&mut info, edit);
+    Ok(info)
+}
+
+async fn api_get_torrent(
+    State(state): State<AppState>,
+    Path(hash): Path<String>,
+) -> Result<Json<TorrentInfo>, (StatusCode, String)> {
+    match torrent_repo::find_one(&state.db, &hash).await {
+        Ok(Some(t)) => Ok(Json(t)),
+        Ok(None) => Err((StatusCode::NOT_FOUND, "not found".into())),
+        Err(err) => Err((StatusCode::INTERNAL_SERVER_ERROR, err.to_string())),
+    }
+}
+
+async fn api_create_torrent(
+    State(state): State<AppState>,
+    Json(edit): Json<AdminTorrentEdit>,
+) -> Result<(StatusCode, Json<TorrentInfo>), (StatusCode, String)> {
+    validate_edit(&edit)?;
+
+    let info_hash = edit
+        .info_hash
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .ok_or((StatusCode::BAD_REQUEST, "info_hash is required".into()))?
+        .to_ascii_lowercase();
+    if !is_hex40(&info_hash) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "info_hash must be 40 hex characters".into(),
+        ));
+    }
+
+    // Refuse to create on top of an existing row: PATCH is the edit flow.
+    if matches!(
+        torrent_repo::find_one(&state.db, &info_hash).await,
+        Ok(Some(_))
+    ) {
+        return Err((
+            StatusCode::CONFLICT,
+            "a torrent with this info_hash already exists; use PATCH to edit".into(),
+        ));
+    }
+
+    let info = build_from_edit(info_hash, &edit)?;
+
+    torrent_repo::upsert_one(&state.db, &info)
+        .await
+        .map_err(|err| {
+            tracing::error!(?err, "admin create failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+        })?;
+
+    Ok((StatusCode::CREATED, Json(info)))
+}
+
+async fn api_update_torrent(
+    State(state): State<AppState>,
+    Path(hash): Path<String>,
+    Json(edit): Json<AdminTorrentEdit>,
+) -> Result<Json<TorrentInfo>, (StatusCode, String)> {
+    validate_edit(&edit)?;
+    let info_hash = hash.to_ascii_lowercase();
+    if !is_hex40(&info_hash) {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "info_hash must be 40 hex characters".into(),
+        ));
+    }
+
+    // Preserve the original ingested_at so editing doesn't bump newness.
+    let existing = torrent_repo::find_one(&state.db, &info_hash)
+        .await
+        .map_err(|err| (StatusCode::INTERNAL_SERVER_ERROR, err.to_string()))?;
+    let Some(existing) = existing else {
+        return Err((StatusCode::NOT_FOUND, "not found".into()));
+    };
+
+    let mut info = build_from_edit(info_hash, &edit)?;
+    info.ingested_at = existing.ingested_at;
+
+    torrent_repo::upsert_one(&state.db, &info)
+        .await
+        .map_err(|err| {
+            tracing::error!(?err, "admin update failed");
+            (StatusCode::INTERNAL_SERVER_ERROR, err.to_string())
+        })?;
+
+    Ok(Json(info))
 }
 
 #[derive(Deserialize)]

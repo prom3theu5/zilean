@@ -196,6 +196,149 @@ pub async fn admin_list(
     Ok((rows.iter().map(TorrentInfo::from_pg_row).collect(), total))
 }
 
+/// Look up a single torrent by info hash. Used by the admin edit flow,
+/// which needs the existing `IngestedAt` so a re-parse doesn't reset it.
+pub async fn find_one(pool: &PgPool, info_hash: &str) -> anyhow::Result<Option<TorrentInfo>> {
+    let row = sqlx::query(r#"SELECT * FROM "Torrents" WHERE "InfoHash" = $1"#)
+        .bind(info_hash)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.as_ref().map(TorrentInfo::from_pg_row))
+}
+
+/// Upsert a single torrent. Used by the admin create/edit handlers.
+/// Mirrors the .NET dashboard flow: caller has already run the title
+/// through parsett and layered any operator overrides on top; we just
+/// write the resulting row. `ON CONFLICT ("InfoHash") DO UPDATE SET ...`
+/// means create and edit go down the same path; the only difference is
+/// whether the caller preserved the original `IngestedAt`.
+pub async fn upsert_one(pool: &PgPool, t: &TorrentInfo) -> anyhow::Result<()> {
+    sqlx::query(
+        r#"
+        INSERT INTO "Torrents" (
+            "InfoHash", "RawTitle", "ParsedTitle", "NormalizedTitle", "CleanedParsedTitle",
+            "Trash", "Year", "Resolution", "Seasons", "Episodes", "Complete", "Volumes",
+            "Languages", "Quality", "Hdr", "Codec", "Audio", "Channels", "Dubbed", "Subbed",
+            "Date", "Group", "Edition", "BitDepth", "Bitrate", "Network", "Extended",
+            "Converted", "Hardcoded", "Region", "Ppv", "Is3d", "Site", "Size", "Proper",
+            "Repack", "Retail", "Upscaled", "Remastered", "Unrated", "Documentary",
+            "EpisodeCode", "Country", "Container", "Extension", "Torrent", "Category",
+            "ImdbId", "IsAdult", "IngestedAt"
+        )
+        VALUES (
+            $1,  $2,  $3,  $4,  $5,  $6,  $7,  $8,  $9,  $10,
+            $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
+            $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
+            $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
+            $41, $42, $43, $44, $45, $46, $47, $48, $49, $50
+        )
+        ON CONFLICT ("InfoHash") DO UPDATE SET
+            "RawTitle"           = EXCLUDED."RawTitle",
+            "ParsedTitle"        = EXCLUDED."ParsedTitle",
+            "NormalizedTitle"    = EXCLUDED."NormalizedTitle",
+            "CleanedParsedTitle" = EXCLUDED."CleanedParsedTitle",
+            "Trash"              = EXCLUDED."Trash",
+            "Year"               = EXCLUDED."Year",
+            "Resolution"         = EXCLUDED."Resolution",
+            "Seasons"            = EXCLUDED."Seasons",
+            "Episodes"           = EXCLUDED."Episodes",
+            "Complete"           = EXCLUDED."Complete",
+            "Volumes"            = EXCLUDED."Volumes",
+            "Languages"          = EXCLUDED."Languages",
+            "Quality"            = EXCLUDED."Quality",
+            "Hdr"                = EXCLUDED."Hdr",
+            "Codec"              = EXCLUDED."Codec",
+            "Audio"              = EXCLUDED."Audio",
+            "Channels"           = EXCLUDED."Channels",
+            "Dubbed"             = EXCLUDED."Dubbed",
+            "Subbed"             = EXCLUDED."Subbed",
+            "Date"               = EXCLUDED."Date",
+            "Group"              = EXCLUDED."Group",
+            "Edition"            = EXCLUDED."Edition",
+            "BitDepth"           = EXCLUDED."BitDepth",
+            "Bitrate"            = EXCLUDED."Bitrate",
+            "Network"            = EXCLUDED."Network",
+            "Extended"           = EXCLUDED."Extended",
+            "Converted"          = EXCLUDED."Converted",
+            "Hardcoded"          = EXCLUDED."Hardcoded",
+            "Region"             = EXCLUDED."Region",
+            "Ppv"                = EXCLUDED."Ppv",
+            "Is3d"               = EXCLUDED."Is3d",
+            "Site"               = EXCLUDED."Site",
+            "Size"               = EXCLUDED."Size",
+            "Proper"             = EXCLUDED."Proper",
+            "Repack"             = EXCLUDED."Repack",
+            "Retail"             = EXCLUDED."Retail",
+            "Upscaled"           = EXCLUDED."Upscaled",
+            "Remastered"         = EXCLUDED."Remastered",
+            "Unrated"            = EXCLUDED."Unrated",
+            "Documentary"        = EXCLUDED."Documentary",
+            "EpisodeCode"        = EXCLUDED."EpisodeCode",
+            "Country"            = EXCLUDED."Country",
+            "Container"          = EXCLUDED."Container",
+            "Extension"          = EXCLUDED."Extension",
+            "Torrent"            = EXCLUDED."Torrent",
+            "Category"           = EXCLUDED."Category",
+            "ImdbId"             = EXCLUDED."ImdbId",
+            "IsAdult"            = EXCLUDED."IsAdult",
+            "IngestedAt"         = EXCLUDED."IngestedAt"
+        "#,
+    )
+    .bind(&t.info_hash)
+    .bind(t.raw_title.clone().unwrap_or_default())
+    .bind(t.parsed_title.clone().unwrap_or_default())
+    .bind(t.normalized_title.clone().unwrap_or_default())
+    .bind(t.cleaned_parsed_title.clone().unwrap_or_default())
+    .bind(t.trash)
+    .bind(t.year)
+    .bind(t.resolution.clone().unwrap_or_default())
+    .bind(&t.seasons)
+    .bind(&t.episodes)
+    .bind(t.complete)
+    .bind(&t.volumes)
+    .bind(&t.languages)
+    .bind(&t.quality)
+    .bind(&t.hdr)
+    .bind(&t.codec)
+    .bind(&t.audio)
+    .bind(&t.channels)
+    .bind(t.dubbed)
+    .bind(t.subbed)
+    .bind(&t.date)
+    .bind(&t.group)
+    .bind(&t.edition)
+    .bind(&t.bit_depth)
+    .bind(&t.bitrate)
+    .bind(&t.network)
+    .bind(t.extended)
+    .bind(t.converted)
+    .bind(t.hardcoded)
+    .bind(&t.region)
+    .bind(t.ppv)
+    .bind(t.is3d)
+    .bind(&t.site)
+    .bind(&t.size)
+    .bind(t.proper)
+    .bind(t.repack)
+    .bind(t.retail)
+    .bind(t.upscaled)
+    .bind(t.remastered)
+    .bind(t.unrated)
+    .bind(t.documentary)
+    .bind(&t.episode_code)
+    .bind(&t.country)
+    .bind(&t.container)
+    .bind(&t.extension)
+    .bind(t.torrent)
+    .bind(&t.category)
+    .bind(&t.imdb_id)
+    .bind(t.is_adult)
+    .bind(t.ingested_at)
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 /// Return a single torrent count, used by the admin stats card.
 pub async fn count(pool: &PgPool) -> anyhow::Result<i64> {
     let n: i64 = sqlx::query_scalar(r#"SELECT COUNT(*) FROM "Torrents""#)

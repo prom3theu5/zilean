@@ -260,6 +260,85 @@ table.grid tbody tr:hover { background: var(--panel-2); }
   white-space: pre-wrap;
 }
 
+/* --- dialog -------------------------------------------------- */
+
+dialog#torrent-dialog {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--panel);
+  color: var(--fg);
+  padding: 0;
+  max-width: 560px;
+  width: min(560px, 100vw);
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.5);
+}
+dialog#torrent-dialog::backdrop {
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px);
+}
+dialog#torrent-dialog form {
+  padding: 1.25rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+dialog#torrent-dialog h2 {
+  margin: 0 0 0.5rem;
+  font-size: 1.25rem;
+}
+dialog#torrent-dialog label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  font-size: 0.9rem;
+  color: var(--muted);
+}
+dialog#torrent-dialog label.row {
+  flex-direction: row;
+  align-items: center;
+  gap: 0.5rem;
+}
+dialog#torrent-dialog .hint {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+dialog#torrent-dialog input[type=text],
+dialog#torrent-dialog input[type=number],
+dialog#torrent-dialog input[type=password],
+dialog#torrent-dialog select {
+  color: var(--fg);
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  padding: 0.4rem 0.6rem;
+  border-radius: 6px;
+}
+dialog#torrent-dialog input:disabled,
+dialog#torrent-dialog select:disabled {
+  opacity: 0.55;
+}
+fieldset.overrides {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0.75rem 1rem;
+  margin: 0.25rem 0 0.5rem;
+}
+fieldset.overrides legend { padding: 0 0.4rem; color: var(--muted); font-size: 0.85rem; }
+.override {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.3rem 0;
+  border-bottom: 1px dashed var(--border);
+}
+.override:last-child { border-bottom: none; }
+.dialog-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 0.5rem;
+  margin-top: 0.5rem;
+}
+
 /* --- responsive ---------------------------------------------- */
 
 @media (max-width: 640px) {
